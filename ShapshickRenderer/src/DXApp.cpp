@@ -251,15 +251,14 @@ void DXApp::OnResize()
 	}
 
 	// create the depth/stencil buffer and view
-	D3D12_RESOURCE_DESC depthStencilDesc;
+	D3D12_RESOURCE_DESC depthStencilDesc = {};
 	depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 	depthStencilDesc.Alignment = 0;
 	depthStencilDesc.Width = mClientWidth;
 	depthStencilDesc.Height = mClientHeight;
 	depthStencilDesc.DepthOrArraySize = 1;
 	depthStencilDesc.MipLevels = 1;
-	depthStencilDesc.SampleDesc.Count = 1;
-	depthStencilDesc.SampleDesc.Quality = 0;
+	depthStencilDesc.SampleDesc = { 1, 0 };
 	depthStencilDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
 	depthStencilDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 	depthStencilDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
@@ -408,19 +407,16 @@ void DXApp::CreateSwapChain()
 {
 	mSwapChain.Reset();
 
-	DXGI_SWAP_CHAIN_DESC1 swapChainDesc;
+	DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
 	swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	swapChainDesc.BufferCount = SwapChainBufferCount;
 	swapChainDesc.Width = mClientWidth;
 	swapChainDesc.Height = mClientHeight;
 	swapChainDesc.Format = mBackBufferFormat;
+	swapChainDesc.SampleDesc = { 1, 0 };
 	swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-	swapChainDesc.SampleDesc.Count = 1;
-	swapChainDesc.SampleDesc.Quality = 0;
-	swapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 	swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
 	swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
-
 
 	ComPtr<IDXGISwapChain1> swapChain1;
 	ThrowIfFailed(mdxgiFactory->CreateSwapChainForHwnd(
