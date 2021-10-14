@@ -428,7 +428,6 @@ void DXApp::CreateSwapChain()
 		&swapChain1)
 	);
 	ThrowIfFailed(swapChain1.As(&mSwapChain));
-
 }
 
 void DXApp::FlushCommandQueue()
