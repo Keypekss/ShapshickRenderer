@@ -3,6 +3,11 @@
 
 using Microsoft::WRL::ComPtr;
 
+struct SceneConstantBuffer {
+	DirectX::XMFLOAT4 offset;
+	float padding[60]; // constant buffer size must be multiple of 256byte
+};
+
 class ShapShickRenderer : public DXApp
 {
 public:
@@ -19,9 +24,14 @@ private:
 	void BuildRootSignature();
 	void BuildShadersAndInputLayout();
 	void BuildTriangle();
+	void BuildConstantBuffer();
 	void BuildPSO();
 
 	ComPtr<ID3D12DescriptorHeap> mCbvHeap;
+	ComPtr<ID3D12Resource> mConstantBuffer;
+	UINT8* mCbvDataBegin = nullptr;
+	SceneConstantBuffer mConstantBufferData{};
+
 	std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
 	ComPtr<ID3DBlob> mVertexShaderByteCode = nullptr;
 	ComPtr<ID3DBlob> mPixelShaderByteCode = nullptr;

@@ -43,6 +43,7 @@ bool ShapShickRenderer::Initialize()
 	ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
 	BuildTriangle();
+	BuildConstantBuffer();
 	BuildRootSignature();
 	BuildShadersAndInputLayout();	
 	BuildPSO();
@@ -62,6 +63,15 @@ void ShapShickRenderer::OnResize()
 
 void ShapShickRenderer::Update(const Timer& gt)
 {
+	const float translationSpeed = 0.0002f;
+	const float offsetBounds = 1.25f;
+
+	mConstantBufferData.offset.x += translationSpeed;
+
+	if (mConstantBufferData.offset.x >= offsetBounds)
+		mConstantBufferData.offset.x = -offsetBounds;
+
+	memcpy(mCbvDataBegin, &mConstantBufferData, sizeof(mConstantBufferData));
 }
 
 void ShapShickRenderer::Draw(const Timer& gt)
@@ -88,6 +98,11 @@ void ShapShickRenderer::Draw(const Timer& gt)
 
 		mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
+		ID3D12DescriptorHeap* ppHeaps[] = { mCbvHeap.Get() };
+		mCommandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+		mCommandList->SetGraphicsRootDescriptorTable(0, mCbvHeap->GetGPUDescriptorHandleForHeapStart());
+
+
 		mCommandList->DrawInstanced(3, 1, 0, 0);
 
 		mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
@@ -111,16 +126,15 @@ void ShapShickRenderer::Draw(const Timer& gt)
 
 void ShapShickRenderer::BuildRootSignature()
 {
-// 	CD3DX12_ROOT_PARAMETER1 rootParameters[1] = {};
-// 
-// 	CD3DX12_DESCRIPTOR_RANGE1 cbvTable = {};
-// 	cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
-// 
-// 	rootParameters[0].InitAsDescriptorTable(1, &cbvTable);
+	CD3DX12_ROOT_PARAMETER1 rootParameters[1] = {};
+	CD3DX12_DESCRIPTOR_RANGE1 cbvTable = {};
+
+	rootParameters[0].InitAsDescriptorTable(1, &cbvTable, D3D12_SHADER_VISIBILITY_VERTEX);
+	cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);	
 
 	// create a empty root signature
 	CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
-	rootSignatureDesc.Init_1_1(0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+	rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
 	ComPtr<ID3DBlob> serializedSignature = nullptr;
 	ComPtr<ID3DBlob> errorBlob = nullptr;
@@ -140,7 +154,7 @@ void ShapShickRenderer::BuildShadersAndInputLayout()
 	mPixelShaderByteCode	= DXUtil::CompileShader(L"Shaders/Shader.hlsl", nullptr, "PS", "ps_5_0");
 
 	mInputLayout = {
-		{ "POSITION",	0, DXGI_FORMAT_R32G32B32_FLOAT,		0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "POSITION",	0, DXGI_FORMAT_R32G32_FLOAT,		0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
 		{ "COLOR",		0, DXGI_FORMAT_R32G32B32A32_FLOAT,	0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
 	};
 }
@@ -148,15 +162,15 @@ void ShapShickRenderer::BuildShadersAndInputLayout()
 void ShapShickRenderer::BuildTriangle()
 {
 	struct Vertex {
-		XMFLOAT3 position;
+		XMFLOAT2 position;
 		XMFLOAT4 color;
 	};
 
 	std::array<Vertex, 3> vertices = {
 				// positions				// colors
-		Vertex({XMFLOAT3(0.0f,  0.5f, 0.0), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)}),
-		Vertex({XMFLOAT3(0.5f, -0.5f, 0.0), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)}),
-		Vertex({XMFLOAT3(-0.5f, -0.5f, 0.0), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)})
+		Vertex({XMFLOAT2(0.0f,    0.25f), XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f)}),
+		Vertex({XMFLOAT2(0.25f,  -0.25f), XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f)}),
+		Vertex({XMFLOAT2(-0.25f, -0.25f), XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f)})
 	};
 
 	const unsigned int vBufferSize = sizeof(vertices);
@@ -171,6 +185,38 @@ void ShapShickRenderer::BuildTriangle()
 	mVertexBufferView.BufferLocation = mVertexBufferGPU->GetGPUVirtualAddress();
 	mVertexBufferView.StrideInBytes = sizeof(Vertex);
 	mVertexBufferView.SizeInBytes = vBufferSize;
+}
+
+void ShapShickRenderer::BuildConstantBuffer()
+{
+	// describe constant buffer heap
+	D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
+	cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	cbvHeapDesc.NumDescriptors = 1;
+	cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;	
+	ThrowIfFailed(mDevice->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&mCbvHeap)));
+
+	const UINT	constantBufferSize = sizeof(SceneConstantBuffer);
+	
+	// create constant buffer
+	ThrowIfFailed(mDevice->CreateCommittedResource(
+		&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+		D3D12_HEAP_FLAG_NONE,
+		&CD3DX12_RESOURCE_DESC::Buffer(constantBufferSize),
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&mConstantBuffer)));
+
+	// describe and create constant buffer view
+	D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+	cbvDesc.BufferLocation = mConstantBuffer->GetGPUVirtualAddress();
+	cbvDesc.SizeInBytes = constantBufferSize;
+	mDevice->CreateConstantBufferView(&cbvDesc, mCbvHeap->GetCPUDescriptorHandleForHeapStart());
+
+	// map and initialize constant buffer. don't unmap until the app closes.
+	CD3DX12_RANGE readRange(0, 0); // we don't intend to read from this resource on the CPU.
+	ThrowIfFailed(mConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mCbvDataBegin)));
+	memcpy(mCbvDataBegin, &mConstantBufferData, sizeof(mConstantBufferData));
 }
 
 void ShapShickRenderer::BuildPSO()
