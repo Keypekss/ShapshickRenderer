@@ -1,5 +1,5 @@
 # ShapshickRenderer
-This repo is planned to be the DirectX 12 port of learnopengl.com
+This repo is planned to be the DirectX 12 port of [learnopengl.com](https://learnopengl.com/)
 
 - Getting started 
 	- [x] Hello Window
