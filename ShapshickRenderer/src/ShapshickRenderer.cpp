@@ -42,8 +42,10 @@ bool ShapShickRenderer::Initialize()
 	// Reset the command list to prep for initialization commands.
 	ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
-	BuildTriangle();
+	BuildBuffers();
 	BuildConstantBuffer();
+	LoadTexture();
+	BuildDescriptorHeaps();
 	BuildRootSignature();
 	BuildShadersAndInputLayout();	
 	BuildPSO();
@@ -61,22 +63,34 @@ void ShapShickRenderer::OnResize()
 	DXApp::OnResize();
 }
 
+float translationSpeedX = 0.0002f;
+float translationSpeedY = 0.0001f;
 void ShapShickRenderer::Update(const Timer& gt)
 {
-	const float translationSpeed = 0.0002f;
-	const float offsetBounds = 1.25f;
+	const float upperBound = 0.75f;
+	const float lowerBound = -0.75f;
+	const float rightBound = 0.75f;
+	const float leftBound = -0.75f;
 
-	mConstantBufferData.offset.x += translationSpeed;
+// 	std::wstring text = L"\nposX: " + std::to_wstring(mConstantBufferData.position.x);
+// 	OutputDebugString(text.c_str());
 
-	if (mConstantBufferData.offset.x >= offsetBounds)
-		mConstantBufferData.offset.x = -offsetBounds;
+	mConstantBufferData.position.x += translationSpeedX;
+	mConstantBufferData.position.y += translationSpeedY;
+
+	// if texture is touching the left or right borders, change direction of movement
+	if (mConstantBufferData.position.x >= rightBound || mConstantBufferData.position.x <= leftBound) 
+		translationSpeedX = -translationSpeedX;	
+	
+	// if texture is touching the upper or lower borders, change direction of movement
+	if (mConstantBufferData.position.y >= upperBound || mConstantBufferData.position.y <= lowerBound)
+		translationSpeedY = -translationSpeedY;
 
 	memcpy(mCbvDataBegin, &mConstantBufferData, sizeof(mConstantBufferData));
 }
 
 void ShapShickRenderer::Draw(const Timer& gt)
 {
-
 	ThrowIfFailed(mDirectCmdListAlloc->Reset());
 	ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), mPipelineStateObject.Get()));
 
@@ -88,22 +102,30 @@ void ShapShickRenderer::Draw(const Timer& gt)
 		mCommandList->RSSetViewports(1, &mScreenViewport);
 		mCommandList->RSSetScissorRects(1, &mScissorRect);
 
-		mCommandList->ClearRenderTargetView(CurrentBackBufferView(), Colors::LightSteelBlue, 0, nullptr);
+		mCommandList->ClearRenderTargetView(CurrentBackBufferView(), Colors::Black, 0, nullptr);
 
 		mCommandList->OMSetRenderTargets(1, &CurrentBackBufferView(), true, &DepthStencilView());
 
 		mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
 		mCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
+		mCommandList->IASetIndexBuffer(&mIndexBufferView);		
 
 		mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-		ID3D12DescriptorHeap* ppHeaps[] = { mCbvHeap.Get() };
-		mCommandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+		// set cbv heap
+		ID3D12DescriptorHeap* cbvDescriptorHeaps[] = { mCbvHeap.Get() };
+		mCommandList->SetDescriptorHeaps(_countof(cbvDescriptorHeaps), cbvDescriptorHeaps);
 		mCommandList->SetGraphicsRootDescriptorTable(0, mCbvHeap->GetGPUDescriptorHandleForHeapStart());
 
+		// set srv heap
+		ID3D12DescriptorHeap* srvDescriptorHeaps[] = { mSrvHeap.Get() };
+		mCommandList->SetDescriptorHeaps(_countof(srvDescriptorHeaps), srvDescriptorHeaps);
 
-		mCommandList->DrawInstanced(3, 1, 0, 0);
+		CD3DX12_GPU_DESCRIPTOR_HANDLE tex(mSrvHeap->GetGPUDescriptorHandleForHeapStart());
+		mCommandList->SetGraphicsRootDescriptorTable(1, tex);
+
+		mCommandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
 
 		mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
 			D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
@@ -126,15 +148,27 @@ void ShapShickRenderer::Draw(const Timer& gt)
 
 void ShapShickRenderer::BuildRootSignature()
 {
-	CD3DX12_ROOT_PARAMETER1 rootParameters[1] = {};
-	CD3DX12_DESCRIPTOR_RANGE1 cbvTable = {};
+	CD3DX12_ROOT_PARAMETER1 rootParameters[2] = {};
+	CD3DX12_DESCRIPTOR_RANGE1 cbvTable = {}; 
+	CD3DX12_DESCRIPTOR_RANGE1 srvTable = {}; 
+
+	cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+	srvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
 
 	rootParameters[0].InitAsDescriptorTable(1, &cbvTable, D3D12_SHADER_VISIBILITY_VERTEX);
-	cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);	
+	rootParameters[1].InitAsDescriptorTable(1, &srvTable, D3D12_SHADER_VISIBILITY_PIXEL);	
 
-	// create a empty root signature
+	// sampler for texture
+	const CD3DX12_STATIC_SAMPLER_DESC pointClamp(
+		0, // shaderRegister
+		D3D12_FILTER_MIN_MAG_MIP_POINT, // filter
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressU
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressV
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER); // addressW
+
+	// create the root signature
 	CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
-	rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+	rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 1, &pointClamp, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
 	ComPtr<ID3DBlob> serializedSignature = nullptr;
 	ComPtr<ID3DBlob> errorBlob = nullptr;
@@ -154,37 +188,59 @@ void ShapShickRenderer::BuildShadersAndInputLayout()
 	mPixelShaderByteCode	= DXUtil::CompileShader(L"Shaders/Shader.hlsl", nullptr, "PS", "ps_5_0");
 
 	mInputLayout = {
-		{ "POSITION",	0, DXGI_FORMAT_R32G32_FLOAT,		0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "COLOR",		0, DXGI_FORMAT_R32G32B32A32_FLOAT,	0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+		{ "POSITION",	0, DXGI_FORMAT_R32G32B32_FLOAT,	0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "TEXCOORD",	0, DXGI_FORMAT_R32G32_FLOAT,	0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
 	};
 }
 
-void ShapShickRenderer::BuildTriangle()
+void ShapShickRenderer::BuildBuffers()
 {
-	struct Vertex {
-		XMFLOAT2 position;
-		XMFLOAT4 color;
+	struct Vertex
+	{
+		XMFLOAT3 position;
+		XMFLOAT2 texCoord;
 	};
 
-	std::array<Vertex, 3> vertices = {
-				// positions				// colors
-		Vertex({XMFLOAT2(0.0f,    0.25f), XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f)}),
-		Vertex({XMFLOAT2(0.25f,  -0.25f), XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f)}),
-		Vertex({XMFLOAT2(-0.25f, -0.25f), XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f)})
+	Vertex vertices[] = {
+		// positions				// texCoords
+		{ { -0.25f, -0.25f , 0.0f}, { 0.0f, 1.0f } },
+		{ {  0.25f, -0.25f , 0.0f}, { 1.0f, 1.0f } },
+		{ { -0.25f,  0.25f , 0.0f}, { 0.0f, 0.0f } },
+		{ {  0.25f,  0.25f , 0.0f}, { 1.0f, 0.0f } }
 	};
 
-	const unsigned int vBufferSize = sizeof(vertices);
+	// set indices
+	uint16_t indices[] = {
+		0, 2, 1,
+		1, 2, 3
+	};
 
-	ThrowIfFailed(D3DCreateBlob(vBufferSize, &mVertexBufferCPU));
-	CopyMemory(mVertexBufferCPU->GetBufferPointer(), vertices.data(), vBufferSize);
+	// sizes of buffers in terms of bytes
+	const UINT vbByteSize = sizeof(vertices);
+	const UINT ibByteSize = sizeof(indices);
 
-	// send vertex buffer to the GPU
-	mVertexBufferGPU = DXUtil::CreateDefaultBuffer(mDevice.Get(), mCommandList.Get(), vertices.data(), vBufferSize, mVertexBufferUploader);
+	ThrowIfFailed(D3DCreateBlob(vbByteSize, &mVertexBufferCPU));
+	CopyMemory(mVertexBufferCPU->GetBufferPointer(), &vertices, vbByteSize);
+
+	ThrowIfFailed(D3DCreateBlob(ibByteSize, &mIndexBufferCPU));
+	CopyMemory(mIndexBufferCPU->GetBufferPointer(), &indices, ibByteSize);
+
+	// send buffers to the gpu
+	mVertexBufferGPU = DXUtil::CreateDefaultBuffer(mDevice.Get(),
+		mCommandList.Get(), &vertices, vbByteSize, mVertexBufferUploader);
+
+	mIndexBufferGPU = DXUtil::CreateDefaultBuffer(mDevice.Get(),
+		mCommandList.Get(), &indices, ibByteSize, mIndexBufferUploader);
 
 	// set vertex buffer view
 	mVertexBufferView.BufferLocation = mVertexBufferGPU->GetGPUVirtualAddress();
 	mVertexBufferView.StrideInBytes = sizeof(Vertex);
-	mVertexBufferView.SizeInBytes = vBufferSize;
+	mVertexBufferView.SizeInBytes = vbByteSize;
+
+	// set index buffer view
+	mIndexBufferView.BufferLocation = mIndexBufferGPU->GetGPUVirtualAddress();
+	mIndexBufferView.Format = DXGI_FORMAT_R16_UINT;
+	mIndexBufferView.SizeInBytes = ibByteSize;
 }
 
 void ShapShickRenderer::BuildConstantBuffer()
@@ -217,6 +273,49 @@ void ShapShickRenderer::BuildConstantBuffer()
 	CD3DX12_RANGE readRange(0, 0); // we don't intend to read from this resource on the CPU.
 	ThrowIfFailed(mConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mCbvDataBegin)));
 	memcpy(mCbvDataBegin, &mConstantBufferData, sizeof(mConstantBufferData));
+}
+
+void ShapShickRenderer::BuildDescriptorHeaps()
+{
+	// create srv heap
+	D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
+	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	srvHeapDesc.NumDescriptors = 1;
+	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	ThrowIfFailed(mDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvHeap)));
+
+	// fill the heap with descriptors
+	CD3DX12_CPU_DESCRIPTOR_HANDLE hDescriptor(mSrvHeap->GetCPUDescriptorHandleForHeapStart());
+
+	auto dvdTexture = mDVDTexture->Resource;
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srvDesc.Format = dvdTexture->GetDesc().Format;
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Texture2D.MostDetailedMip = 0;
+	srvDesc.Texture2D.MipLevels = dvdTexture->GetDesc().MipLevels;
+	srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+	mDevice->CreateShaderResourceView(dvdTexture.Get(), &srvDesc, hDescriptor);
+}
+
+void ShapShickRenderer::LoadTexture()
+{
+	mDVDTexture = std::make_unique<Texture>();
+	mDVDTexture->Filename = L"Textures/dvd.dds";
+	mDVDTexture->Name = "dvdTexture";
+
+	ResourceUploadBatch resourceUpload(mDevice.Get());
+	resourceUpload.Begin();
+	
+	ThrowIfFailed(CreateDDSTextureFromFile(mDevice.Get(), resourceUpload, (mDVDTexture->Filename).c_str(), mDVDTexture->Resource.ReleaseAndGetAddressOf()));
+
+	// upload resources to the gpu
+	auto uploadResourcesFinished = resourceUpload.End(mCommandQueue.Get());
+
+	uploadResourcesFinished.wait();
+
 }
 
 void ShapShickRenderer::BuildPSO()
